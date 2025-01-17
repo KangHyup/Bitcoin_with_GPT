@@ -1,4 +1,4 @@
-# openai_trader.py
+#데이터를 기반으로 프롬프트를 작성해 실제 코인을 매매
 
 import os
 import json
@@ -60,3 +60,34 @@ def send_to_openai_and_trade(data_for_ai):
         ai_result = {"decision": "hold", "reason": "JSON 파싱 실패"}
 
     decision = ai_result.get("decision", "hold")
+
+    # ---------------------------
+    # (3) 매매 로직 실행
+    # ---------------------------
+    # 수수료 등을 고려해 원화 잔고는 조금 줄인다 (예: *0.9995)
+    my_krw = my_krw * 0.9995
+
+    if decision == "buy":
+        # KRW 5,000 이상이면 시장가 매수
+        if my_krw >= 5000:
+            print(">>> BUY (market order) KRW-BTC")
+            buy_result = upbit.buy_market_order("KRW-BTC", my_krw)
+            print(buy_result)
+            print("buy reason:", reason)
+        else:
+            print("매수불가 : 보유 KRW가 5000원 미만입니다.")
+
+    elif decision == "sell":
+        # 내가 가진 BTC 평가 금액이 5,000원 이상인지 확인
+        current_price = pyupbit.get_orderbook("KRW-BTC")['orderbook_units'][0]["ask_price"]
+        if (my_btc * current_price) >= 5000:
+            print(">>> SELL (market order) KRW-BTC")
+            sell_result = upbit.sell_market_order("KRW-BTC", my_btc)
+            print(sell_result)
+            print("sell reason:", reason)
+        else:
+            print("매도불가 : 보유 BTC 평가액이 5000원 미만입니다.")
+
+    else:
+        # hold 상태면 아무 매매도 하지 않는다
+        print("hold:", reason)
