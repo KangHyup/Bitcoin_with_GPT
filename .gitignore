@@ -1,0 +1,22 @@
+# macOS에 의해 생성되는 시스템 파일
+.DS_Store
+
+# 로그 파일
+*.log
+
+# Node.js 의존성 폴더
+node_modules/
+
+# Python 캐시 파일
+__pycache__/
+*.pyc
+
+# 환경 변수 파일
+.env
+.env.*  # 여러 이름의 env 파일 가능
+
+# 빌드 폴더 (예: React, Vue 등)
+build/
+dist/
+
+# 기타 사용자의 선택에 따라 제외 가능
