@@ -38,18 +38,6 @@ def fetch_upbit_data(symbol="KRW-BTC", count_day_90=100, count_day_30=50, count_
     df_30 = pyupbit.get_ohlcv(symbol, count=count_day_30, interval="day")
     df_24h = pyupbit.get_ohlcv(symbol, count=count_min_60, interval="minute60")
 
-    # 데이터프레임이 제대로 로드되었는지 확인
-    print(f"df_90 has {len(df_90)} rows")
-    print(f"df_30 has {len(df_30)} rows")
-    print(f"df_24h has {len(df_24h)} rows")
-
-    print("\ndf_90 head:")
-    print(df_90.head())
-    print("\ndf_30 head:")
-    print(df_30.head())
-    print("\ndf_24h head:")
-    print(df_24h.head())
-
     return df_90, df_30, df_24h
 
 
@@ -79,16 +67,18 @@ def make_unique_columns(df):
     """
     데이터프레임의 컬럼명을 고유하게 만듭니다.
     중복된 컬럼명에 숫자 접미사를 추가합니다.
-    
+
     Parameters:
         df (DataFrame): 컬럼명을 고유하게 만들 데이터프레임
-    
+
     Returns:
         DataFrame: 컬럼명이 고유하게 변경된 데이터프레임
     """
     cols = pd.Series(df.columns)
-    for dup in cols[cols.duplicated()].unique(): 
-        cols[cols[cols == dup].index.values.tolist()] = [dup + '_' + str(i) if i != 0 else dup for i in range(sum(cols == dup))]
+    for dup in cols[cols.duplicated()].unique():
+        cols[cols[cols == dup].index.values.tolist()] = [
+            dup + '_' + str(i) if i != 0 else dup for i in range(sum(cols == dup))
+        ]
     df.columns = cols
     return df
 
@@ -107,8 +97,6 @@ def verify_unique_columns(df, name):
     duplicates = df.columns[df.columns.duplicated()].tolist()
     if duplicates:
         raise ValueError(f"{name} has duplicate columns: {duplicates}")
-    else:
-        print(f"{name} has all unique columns.")
 
 
 def compute_technical_indicators(df_30, df_24h):
@@ -122,12 +110,6 @@ def compute_technical_indicators(df_30, df_24h):
     Returns:
         tuple: (df_30, df_24h) 보조지표가 추가된 데이터프레임 튜플
     """
-    print("\nBefore computing indicators:")
-    print("df_30 columns:", df_30.columns)
-    print("df_30 'Close' dtype:", df_30['Close'].dtype)
-    print("df_24h columns:", df_24h.columns)
-    print("df_24h 'Close' dtype:", df_24h['Close'].dtype)
-
     # 보조지표 추가
     try:
         # 'add_all_ta_features'를 사용하여 모든 보조지표 추가
@@ -142,17 +124,15 @@ def compute_technical_indicators(df_30, df_24h):
         )
 
     except KeyError as ke:
-        print(f"보조지표 계산 중 KeyError 발생: {ke}")
         # 보조지표 컬럼을 None으로 설정
-        ta_columns_30 = [col for col in df_30.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'value']]
-        ta_columns_24h = [col for col in df_24h.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'value']]
+        ta_columns_30 = [col for col in df_30.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+        ta_columns_24h = [col for col in df_24h.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
         df_30[ta_columns_30] = None
         df_24h[ta_columns_24h] = None
-    except Exception as e:
-        print(f"보조지표 계산 중 예상치 못한 에러 발생: {e}")
+    except Exception:
         # 보조지표 컬럼을 None으로 설정
-        ta_columns_30 = [col for col in df_30.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'value']]
-        ta_columns_24h = [col for col in df_24h.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'value']]
+        ta_columns_30 = [col for col in df_30.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+        ta_columns_24h = [col for col in df_24h.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
         df_30[ta_columns_30] = None
         df_24h[ta_columns_24h] = None
 
@@ -163,13 +143,6 @@ def compute_technical_indicators(df_30, df_24h):
     # 고유성 검증
     verify_unique_columns(df_30, "df_30")
     verify_unique_columns(df_24h, "df_24h")
-
-    # 보조지표 계산 후 데이터 확인
-    print("\nAfter computing indicators:")
-    print("df_30 with indicators:")
-    print(df_30.tail())  # 마지막 5개 행 출력
-    print("\ndf_24h with indicators:")
-    print(df_24h.tail())  # 마지막 5개 행 출력
 
     return df_30, df_24h
 
@@ -191,8 +164,7 @@ def fetch_fear_greed_index():
         else:
             fng_value = None
             fng_classification = None
-    except Exception as e:
-        print("공포/탐욕 지수 조회 실패:", e)
+    except Exception:
         fng_value = None
         fng_classification = None
 
@@ -218,38 +190,42 @@ def fetch_balances():
     }
 
 
-def fetch_crypto_news(api_key, limit=10):
+def fetch_crypto_news(api_key, limit=5):
     """
-    CryptoPanic API를 사용하여 최신 뉴스 헤드라인을 가져오는 함수.
+    CryptoPanic API를 사용하여 BTC, ETH, XRP에 관련된 최신 뉴스 헤드라인을 가져오는 함수.
 
     Parameters:
         api_key (str): CryptoPanic API 키
-        limit (int): 가져올 뉴스 개수 (기본값: 10)
+        limit (int): 가져올 뉴스 개수 (기본값: 5)
 
     Returns:
-        list: 뉴스 헤드라인 리스트 (각 헤드라인은 dict로 {'title': ..., 'published_at': ..., 'url': ...})
+        list: 뉴스 헤드라인 리스트 (각 헤드라인은 dict로 {'title': ..., 'published_at': ...})
     """
     base_url = "https://cryptopanic.com/api/v1/posts/"
     params = {
         "auth_token": api_key,
         "filter": "news",
         "regions": "en",
-        "limit": limit
+        "limit": 50  # 충분한 수의 뉴스를 가져오기 위해 50으로 설정
     }
     try:
         response = requests.get(base_url, params=params, timeout=5)
         response.raise_for_status()
         data = response.json()
         news_list = []
+        keywords = ["btc", "eth", "xrp", "bitcoin", "ethereum", "ripple"]  # 필터링할 키워드
         for post in data.get("results", []):
-            news_list.append({
-                "title": post.get("title", ""),
-                "published_at": post.get("published_at", ""),
-                "url": post.get("url", "")
-            })
+            title = post.get("title", "").lower()
+            if any(keyword in title for keyword in keywords):
+                news_list.append({
+                    "title": post.get("title", ""),
+                    "published_at": post.get("published_at", "")
+                })
+                if len(news_list) >= limit:
+                    break  # 원하는 수의 뉴스만 수집
         return news_list
     except requests.exceptions.RequestException as e:
-        print(f"CryptoPanic API 요청 중 오류 발생: {e}")
+        # 예외 발생 시 빈 리스트 반환
         return []
 
 
@@ -318,7 +294,7 @@ def get_data_for_ai():
 
     # 6. CryptoPanic 뉴스 가져오기
     crypto_news_api_key = os.getenv("CRYPTOPANIC_API_KEY")  # .env에 CRYPTOPANIC_API_KEY 추가 필요
-    crypto_news = fetch_crypto_news(api_key=crypto_news_api_key, limit=10)
+    crypto_news = fetch_crypto_news(api_key=crypto_news_api_key, limit=5)
 
     # 7. AI에게 넘길 데이터 구성
     data_for_ai = prepare_data_for_ai(df_90, df_30, df_24h, fear_greed, balances, crypto_news)
@@ -330,14 +306,20 @@ if __name__ == "__main__":
     try:
         data_for_ai = get_data_for_ai()
         # data_for_ai라는 dict가 있다고 가정
-        print("\nFear and Greed Index:")
-        print(json.dumps(data_for_ai["fear_greed"], ensure_ascii=False, indent=2))
 
-        print("\nLatest Crypto News:")
-        print(json.dumps(data_for_ai["crypto_news"], ensure_ascii=False, indent=2))
+        # 정제된 최신 뉴스 헤드라인 출력
+        print("Latest Crypto News:")
+        for news in data_for_ai["crypto_news"]:
+            print(f"Title: {news['title']}")
+            print(f"Published at: {news['published_at']}")
+            print()  # 각 뉴스 항목 사이에 빈 줄 추가
+
     except TypeError as te:
-        print(f"TypeError 발생: {te}")
+        # 적절한 예외 처리 추가 가능
+        pass
     except KeyError as ke:
-        print(f"KeyError 발생: {ke}")
-    except Exception as e:
-        print(f"예상치 못한 에러 발생: {e}")
+        # 적절한 예외 처리 추가 가능
+        pass
+    except Exception:
+        # 적절한 예외 처리 추가 가능
+        pass
