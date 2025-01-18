@@ -6,6 +6,7 @@ import pandas as pd
 import logging
 import base64
 import time
+import logging
 from io import BytesIO
 from PIL import Image
 
@@ -24,9 +25,10 @@ from selenium.webdriver.support import expected_conditions as EC
 load_dotenv()
 
 logging.basicConfig(
-    filename='data_fetcher.log',
+    filename='data_fetcher.log', 
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s:%(message)s'
+    format='%(asctime)s %(levelname)s:%(message)s',
+    encoding='utf-8'
 )
 
 class DataFetcher:
