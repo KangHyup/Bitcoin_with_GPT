@@ -1,32 +1,52 @@
 # data_fetcher.py
-# 데이터를 처리하고 이를 OpenAI API에 넘김
+# 데이터를 처리하고 이를 OpenAI API에 전송
 
 import os
-import pyupbit
+import json
 import requests
 import pandas as pd
-import json
+import logging
 
-# 보조지표 ta 라이브러리
-from ta import add_all_ta_features
-from ta.utils import dropna
-
-# .env에서 불러오려면 필요
+from binance import Client
+from ta.momentum import RSIIndicator
+from ta.trend import SMAIndicator
 from dotenv import load_dotenv
+
+# .env 파일 로드
 load_dotenv()
 
-# 업비트 로그인
-ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY")
-SECRET_KEY = os.getenv("UPBIT_SECRET_KEY")
-upbit = pyupbit.Upbit(ACCESS_KEY, SECRET_KEY)
+# 바이낸스 API 키 및 시크릿 로드
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+BINANCE_TESTNET = False  # 테스트넷 사용 시 True로 설정
 
+# OpenAI API 키 로드
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
-def fetch_upbit_data(symbol="KRW-BTC", count_day_90=100, count_day_30=50, count_min_60=50):
+# CryptoPanic API 키 로드
+CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY")
+
+# 로깅 설정
+logging.basicConfig(
+    filename='data_fetcher.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s:%(message)s'
+)
+
+# 바이낸스 클라이언트 초기화
+client = Client(BINANCE_API_KEY, BINANCE_API_SECRET, testnet=BINANCE_TESTNET)
+
+# 테스트넷을 사용하는 경우 추가 설정
+if BINANCE_TESTNET:
+    client.API_URL = 'https://testnet.binance.vision/api'
+
+def fetch_binance_data(symbol="BTCUSDT", count_day_90=90, count_day_30=30, count_min_60=60):
     """
-    업비트에서 시세 데이터를 불러오는 함수.
+    바이낸스에서 시세 데이터를 불러오는 함수.
 
     Parameters:
-        symbol (str): 조회할 심볼 (기본값: "KRW-BTC")
+        symbol (str): 조회할 심볼 (기본값: "BTCUSDT")
         count_day_90 (int): 90일 일봉 데이터 개수
         count_day_30 (int): 30일 일봉 데이터 개수
         count_min_60 (int): 24시간 1시간봉 데이터 개수
@@ -34,34 +54,26 @@ def fetch_upbit_data(symbol="KRW-BTC", count_day_90=100, count_day_30=50, count_
     Returns:
         tuple: (df_90, df_30, df_24h) 데이터프레임 튜플
     """
-    df_90 = pyupbit.get_ohlcv(symbol, count=count_day_90, interval="day")
-    df_30 = pyupbit.get_ohlcv(symbol, count=count_day_30, interval="day")
-    df_24h = pyupbit.get_ohlcv(symbol, count=count_min_60, interval="minute60")
+    def get_historical_klines(symbol, interval, lookback):
+        klines = client.get_historical_klines(symbol, interval, lookback)
+        df = pd.DataFrame(klines, columns=[
+            'Date', 'Open', 'High', 'Low', 'Close', 'Volume',
+            'Close_time', 'Quote_asset_volume', 'Number_of_trades',
+            'Taker_buy_base_asset_volume', 'Taker_buy_quote_asset_volume', 'Ignore'
+        ])
+        df['Date'] = pd.to_datetime(df['Date'], unit='ms')
+        df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+        # 숫자형 데이터로 변환
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
 
+    df_90 = get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, f"{count_day_90} day ago UTC")
+    df_30 = get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, f"{count_day_30} day ago UTC")
+    df_24h = get_historical_klines(symbol, Client.KLINE_INTERVAL_1HOUR, f"{count_min_60} hour ago UTC")
+
+    logging.info("바이낸스 데이터 수집 완료.")
     return df_90, df_30, df_24h
-
-
-def rename_columns(df):
-    """
-    데이터프레임의 컬럼명을 대문자로 변경하고 인덱스를 'Date'로 설정하는 함수.
-
-    Parameters:
-        df (DataFrame): 컬럼명을 변경할 데이터프레임
-
-    Returns:
-        DataFrame: 컬럼명이 변경된 데이터프레임
-    """
-    df.rename(columns={
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume"
-    }, inplace=True)
-    df.reset_index(inplace=True)
-    df.rename(columns={"index": "Date"}, inplace=True)
-    return df
-
 
 def make_unique_columns(df):
     """
@@ -76,12 +88,11 @@ def make_unique_columns(df):
     """
     cols = pd.Series(df.columns)
     for dup in cols[cols.duplicated()].unique():
-        cols[cols[cols == dup].index.values.tolist()] = [
+        cols[cols[cols == dup].index.tolist()] = [
             dup + '_' + str(i) if i != 0 else dup for i in range(sum(cols == dup))
         ]
     df.columns = cols
     return df
-
 
 def verify_unique_columns(df, name):
     """
@@ -98,7 +109,6 @@ def verify_unique_columns(df, name):
     if duplicates:
         raise ValueError(f"{name} has duplicate columns: {duplicates}")
 
-
 def compute_technical_indicators(df_30, df_24h):
     """
     보조지표(RSI, SMA 등)를 계산하여 데이터프레임에 추가하는 함수.
@@ -110,18 +120,26 @@ def compute_technical_indicators(df_30, df_24h):
     Returns:
         tuple: (df_30, df_24h) 보조지표가 추가된 데이터프레임 튜플
     """
-    # 보조지표 추가
     try:
-        # 'add_all_ta_features'를 사용하여 모든 보조지표 추가
-        df_30 = add_all_ta_features(
-            df_30, open="Open", high="High", low="Low", close="Close", volume="Volume",
-            fillna=True
-        )
+        # RSI 추가
+        rsi_30 = RSIIndicator(close=df_30["Close"], window=14)
+        df_30["RSI14"] = rsi_30.rsi()
 
-        df_24h = add_all_ta_features(
-            df_24h, open="Open", high="High", low="Low", close="Close", volume="Volume",
-            fillna=True
-        )
+        rsi_24h = RSIIndicator(close=df_24h["Close"], window=14)
+        df_24h["RSI14"] = rsi_24h.rsi()
+
+        # SMA 추가
+        sma_30 = SMAIndicator(close=df_30["Close"], window=20)
+        df_30["SMA20"] = sma_30.sma_indicator()
+
+        sma_24h = SMAIndicator(close=df_24h["Close"], window=20)
+        df_24h["SMA20"] = sma_24h.sma_indicator()
+
+        # 기술적 지표 계산 후 결측치 제거
+        df_30.dropna(inplace=True)
+        df_24h.dropna(inplace=True)
+
+        logging.info("기술적 지표 계산 완료 및 결측치 제거됨.")
 
     except KeyError as ke:
         # 보조지표 컬럼을 None으로 설정
@@ -129,7 +147,11 @@ def compute_technical_indicators(df_30, df_24h):
         ta_columns_24h = [col for col in df_24h.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
         df_30[ta_columns_30] = None
         df_24h[ta_columns_24h] = None
-    except Exception:
+        logging.error(f"KeyError 발생: {ke}")
+
+    except Exception as e:
+        print(f"Technical indicators computation error: {e}")
+        logging.error(f"Technical indicators computation error: {e}")
         # 보조지표 컬럼을 None으로 설정
         ta_columns_30 = [col for col in df_30.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
         ta_columns_24h = [col for col in df_24h.columns if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
@@ -145,7 +167,6 @@ def compute_technical_indicators(df_30, df_24h):
     verify_unique_columns(df_24h, "df_24h")
 
     return df_30, df_24h
-
 
 def fetch_fear_greed_index():
     """
@@ -164,7 +185,10 @@ def fetch_fear_greed_index():
         else:
             fng_value = None
             fng_classification = None
-    except Exception:
+        logging.info("공포/탐욕 지수 수집 완료.")
+    except Exception as e:
+        print(f"Fear & Greed Index API 요청 중 오류 발생: {e}")
+        logging.error(f"Fear & Greed Index API 요청 중 오류 발생: {e}")
         fng_value = None
         fng_classification = None
 
@@ -173,30 +197,37 @@ def fetch_fear_greed_index():
         "classification": fng_classification
     }
 
-
 def fetch_balances():
     """
-    업비트에서 잔고를 조회하는 함수.
+    바이낸스에서 잔고를 조회하는 함수.
 
     Returns:
-        dict: {"KRW": float, "BTC": float}
+        dict: {"BTC": float, "ETH": float, ...}
     """
-    my_krw = upbit.get_balance("KRW")
-    my_btc = upbit.get_balance("KRW-BTC")
+    try:
+        account_info = client.get_account()
+        balances = {}
+        for balance in account_info['balances']:
+            asset = balance['asset']
+            free = float(balance['free'])
+            locked = float(balance['locked'])
+            total = free + locked
+            if total > 0:
+                balances[asset] = total
+        logging.info("잔고 조회 완료.")
+        return balances
+    except Exception as e:
+        print(f"잔고 조회 중 오류 발생: {e}")
+        logging.error(f"잔고 조회 중 오류 발생: {e}")
+        return {}
 
-    return {
-        "KRW": my_krw,
-        "BTC": my_btc
-    }
-
-
-def fetch_crypto_news(api_key, limit=5):
+def fetch_crypto_news(api_key, limit=3):
     """
     CryptoPanic API를 사용하여 BTC, ETH, XRP에 관련된 최신 뉴스 헤드라인을 가져오는 함수.
 
     Parameters:
         api_key (str): CryptoPanic API 키
-        limit (int): 가져올 뉴스 개수 (기본값: 5)
+        limit (int): 가져올 뉴스 개수 (기본값: 3)
 
     Returns:
         list: 뉴스 헤드라인 리스트 (각 헤드라인은 dict로 {'title': ..., 'published_at': ...})
@@ -213,21 +244,39 @@ def fetch_crypto_news(api_key, limit=5):
         response.raise_for_status()
         data = response.json()
         news_list = []
-        keywords = ["btc", "eth", "xrp", "bitcoin", "ethereum", "ripple"]  # 필터링할 키워드
+        keywords = ["btc", "eth", "xrp"]  # 필터링할 키워드
         for post in data.get("results", []):
             title = post.get("title", "").lower()
             if any(keyword in title for keyword in keywords):
                 news_list.append({
                     "title": post.get("title", ""),
-                    "published_at": post.get("published_at", "")
+                    "pub_at": post.get("published_at", "")
                 })
                 if len(news_list) >= limit:
                     break  # 원하는 수의 뉴스만 수집
+        logging.info("CryptoPanic 뉴스 수집 완료.")
         return news_list
     except requests.exceptions.RequestException as e:
         # 예외 발생 시 빈 리스트 반환
+        print(f"CryptoPanic API 요청 중 오류 발생: {e}")
+        logging.error(f"CryptoPanic API 요청 중 오류 발생: {e}")
         return []
 
+def validate_data(df, name):
+    """
+    데이터프레임의 무결성을 검증하는 함수.
+
+    Parameters:
+        df (DataFrame): 검증할 데이터프레임
+        name (str): 데이터프레임 이름
+
+    Raises:
+        ValueError: 데이터프레임이 비어있거나 결측치가 존재할 경우
+    """
+    if df.empty:
+        raise ValueError(f"{name} 데이터프레임이 비어 있습니다.")
+    if df.isnull().values.any():
+        raise ValueError(f"{name} 데이터프레임에 결측치가 존재합니다.")
 
 def prepare_data_for_ai(df_90, df_30, df_24h, fear_greed, balances, crypto_news):
     """
@@ -244,10 +293,10 @@ def prepare_data_for_ai(df_90, df_30, df_24h, fear_greed, balances, crypto_news)
     Returns:
         dict: AI에게 넘길 데이터 딕셔너리
     """
-    # 불필요한 'value' 컬럼 제거 (필요 시 유지)
-    df_90 = df_90.drop(columns=['value'], errors='ignore')
-    df_30 = df_30.drop(columns=['value'], errors='ignore')
-    df_24h = df_24h.drop(columns=['value'], errors='ignore')
+    # 데이터 검증
+    validate_data(df_90, "df_90")
+    validate_data(df_30, "df_30")
+    validate_data(df_24h, "df_24h")
 
     # to_dict(orient='records')을 사용하여 데이터프레임을 딕셔너리 리스트로 변환
     day_90_records = df_90.to_dict(orient='records')
@@ -267,59 +316,133 @@ def prepare_data_for_ai(df_90, df_30, df_24h, fear_greed, balances, crypto_news)
 
     return data_for_ai
 
+def preprocess_data_for_api(data_for_ai, recent_points=5):
+    """
+    AI에 전송할 데이터를 최적화하는 함수.
+    
+    Parameters:
+        data_for_ai (dict): 원본 데이터 딕셔너리
+        recent_points (int): 각 차트 데이터에서 최근 몇 개의 데이터 포인트를 유지할지 결정
+    
+    Returns:
+        dict: 최적화된 데이터 딕셔너리
+    """
+    optimized_data = {}
+    
+    # 잔고 정보 최적화
+    optimized_data["bal"] = data_for_ai["balance"]
+    
+    # 차트 데이터 최적화
+    optimized_data["charts"] = {}
+    for chart_key, chart_data in data_for_ai["chart_data"].items():
+        # 최근 N개의 데이터 포인트만 선택
+        recent_chart_data = chart_data[-recent_points:]
+        optimized_chart = []
+        for entry in recent_chart_data:
+            optimized_entry = {
+                "Date": entry["Date"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(entry["Date"], pd.Timestamp) else entry["Date"],
+                "Close": entry["Close"],
+                "Volume": entry["Volume"],
+                "RSI14": round(entry.get("RSI14", 0), 2),
+                "SMA20": round(entry.get("SMA20", 0), 2)
+            }
+            optimized_chart.append(optimized_entry)
+        optimized_data["charts"][chart_key] = optimized_chart
+    
+    # 공포/탐욕 지수 최적화
+    optimized_data["fg"] = {
+        "value": data_for_ai["fear_greed"].get("value", None),
+        "class": data_for_ai["fear_greed"].get("classification", None)
+    }
+    
+    # 뉴스 데이터 최적화 (상위 3개 뉴스만)
+    optimized_data["news"] = data_for_ai.get("crypto_news", [])[:3]
+    
+    logging.info("데이터 최적화 완료.")
+    return optimized_data
+
+import openai
+
+def send_to_openai(optimized_data):
+    """
+    최적화된 데이터를 OpenAI API에 전송하는 함수.
+    
+    Parameters:
+        optimized_data (dict): 최적화된 데이터 딕셔너리
+    
+    Returns:
+        str: OpenAI의 응답 내용
+    """
+    # JSON 형식으로 데이터를 변환
+    prompt = json.dumps(optimized_data, ensure_ascii=False)
+    
+    # OpenAI API 호출
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a crypto investment assistant."},
+                {"role": "user", "content": f"Analyze the following crypto data and provide investment insights:\n{prompt}"}
+            ],
+            max_tokens=200  # 응답 토큰 수 제한
+        )
+        logging.info("OpenAI API 요청 및 응답 완료.")
+        return response.choices[0].message['content']
+    except Exception as e:
+        print(f"OpenAI API 요청 중 오류 발생: {e}")
+        logging.error(f"OpenAI API 요청 중 오류 발생: {e}")
+        return "Error: Unable to get response from OpenAI API."
 
 def get_data_for_ai():
     """
     전체 데이터를 가져와 AI에게 넘길 데이터를 준비하는 함수.
-
+    
     Returns:
         dict: AI에게 넘길 데이터 딕셔너리
     """
-    # 1. 업비트 시세 불러오기
-    df_90, df_30, df_24h = fetch_upbit_data()
+    # 1. 바이낸스 시세 불러오기
+    df_90, df_30, df_24h = fetch_binance_data()
 
-    # 2. 컬럼명 변경 및 인덱스 처리
-    df_90 = rename_columns(df_90)
-    df_30 = rename_columns(df_30)
-    df_24h = rename_columns(df_24h)
-
-    # 3. 보조지표 계산
+    # 2. 보조지표 계산
     df_30, df_24h = compute_technical_indicators(df_30, df_24h)
 
-    # 4. 공포/탐욕 지수 가져오기
+    # 3. 공포/탐욕 지수 가져오기
     fear_greed = fetch_fear_greed_index()
 
-    # 5. 잔고 조회
+    # 4. 잔고 조회
     balances = fetch_balances()
 
-    # 6. CryptoPanic 뉴스 가져오기
-    crypto_news_api_key = os.getenv("CRYPTOPANIC_API_KEY")  # .env에 CRYPTOPANIC_API_KEY 추가 필요
-    crypto_news = fetch_crypto_news(api_key=crypto_news_api_key, limit=5)
+    # 5. CryptoPanic 뉴스 가져오기
+    crypto_news = fetch_crypto_news(api_key=CRYPTOPANIC_API_KEY, limit=3)
 
-    # 7. AI에게 넘길 데이터 구성
+    # 6. AI에게 넘길 데이터 구성
     data_for_ai = prepare_data_for_ai(df_90, df_30, df_24h, fear_greed, balances, crypto_news)
 
     return data_for_ai
 
-
 if __name__ == "__main__":
     try:
         data_for_ai = get_data_for_ai()
-        # data_for_ai라는 dict가 있다고 가정
-
-        # 정제된 최신 뉴스 헤드라인 출력
-        print("Latest Crypto News:")
-        for news in data_for_ai["crypto_news"]:
-            print(f"Title: {news['title']}")
-            print(f"Published at: {news['published_at']}")
-            print()  # 각 뉴스 항목 사이에 빈 줄 추가
-
+        
+        # 데이터 최적화
+        optimized_data = preprocess_data_for_api(data_for_ai, recent_points=5)
+        
+        # OpenAI API에 전송 및 응답 받기
+        analysis = send_to_openai(optimized_data)
+        
+        # 결과 출력
+        print("Analysis by OpenAI:")
+        print(analysis)
+    
     except TypeError as te:
-        # 적절한 예외 처리 추가 가능
-        pass
+        print(f"TypeError 발생: {te}")
+        logging.error(f"TypeError 발생: {te}")
     except KeyError as ke:
-        # 적절한 예외 처리 추가 가능
-        pass
-    except Exception:
-        # 적절한 예외 처리 추가 가능
-        pass
+        print(f"KeyError 발생: {ke}")
+        logging.error(f"KeyError 발생: {ke}")
+    except ValueError as ve:
+        print(f"ValueError 발생: {ve}")
+        logging.error(f"ValueError 발생: {ve}")
+    except Exception as e:
+        print(f"예상치 못한 에러 발생: {e}")
+        logging.error(f"예상치 못한 에러 발생: {e}")
