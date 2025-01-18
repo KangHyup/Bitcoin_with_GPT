@@ -1,5 +1,7 @@
+requests
+pandas
+Pillow
 python-dotenv
-openai
-pyupbit
+selenium
 ta
-selenuum
+python-binance

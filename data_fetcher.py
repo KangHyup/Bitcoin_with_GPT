@@ -250,41 +250,40 @@ class DataFetcher:
 
         try:
             driver.get(url)
-            
-            # 페이지가 완전히 로딩될 때까지 잠시 대기 (필요하다면 WebDriverWait으로 대체 가능)
-            time.sleep(5)
-            
-            # 1) "시간 메뉴" 버튼 클릭 (드롭다운 열기)
-            try:
-                menu_button = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, '//*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[1]/span/cq-clickable')
-                    )
-                )
-                menu_button.click()
-                logging.info("시간 메뉴 버튼 클릭 완료.")
-                
-                # 드롭다운이 열리는 데 시간이 걸릴 수 있으므로 잠시 대기
-                time.sleep(2)
-            except Exception as e:
-                logging.warning(f"시간 메뉴 버튼을 찾지 못했습니다: {e}")
+            time.sleep(5)  # 페이지 로딩 대기
 
-            # 2) "4시간" 항목 클릭 (cq-item[9])
-            try:
-                four_hour_option = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, '//*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[1]/cq-menu-dropdown/cq-item[9]')
-                    )
-                )
-                four_hour_option.click()
-                logging.info('"4시간" 옵션 클릭 완료.')
-                
-                # 4시간봉 차트가 반영될 때까지 잠시 대기
-                time.sleep(3)
-            except Exception as e:
-                logging.warning(f'"4시간" 옵션을 찾지 못했습니다: {e}')
+            # 1) "시간 메뉴" 클릭 (필요하다면 여전히 활용)
+            # menu_button = WebDriverWait(driver, 10).until(
+            #     EC.element_to_be_clickable(
+            #         (By.XPATH, '//*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[1]/span/cq-clickable')
+            #     )
+            # )
+            # menu_button.click()
+            # time.sleep(2)
 
-            # 3) 스크린샷 찍기
+            # 2) "지표" 메뉴 클릭 (XPath: //*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[3]/span)
+            try:
+                indicator_menu = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[3]/span'))
+                )
+                indicator_menu.click()
+                logging.info("지표 메뉴 클릭 완료.")
+                time.sleep(2)  # 드롭다운 표시 대기
+            except Exception as e:
+                logging.warning(f"지표 메뉴 버튼을 찾지 못했습니다: {e}")
+
+            # 3) "볼린저 밴드" 옵션 클릭 (XPath: //*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[3]/cq-menu-dropdown/cq-scroll/cq-studies/cq-studies-content/cq-item[15])
+            try:
+                bollinger_option = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="fullChartiq"]/div/div/div[1]/div/div/cq-menu[3]/cq-menu-dropdown/cq-scroll/cq-studies/cq-studies-content/cq-item[15]'))
+                )
+                bollinger_option.click()
+                logging.info('"볼린저 밴드" 옵션 클릭 완료.')
+                time.sleep(3)  # 지표가 반영될 때까지 대기
+            except Exception as e:
+                logging.warning(f'"볼린저 밴드" 옵션을 찾지 못했습니다: {e}')
+
+            # 4) 스크린샷 찍기
             driver.save_screenshot(save_path)
             logging.info(f"스크린샷 저장 완료: {save_path}")
             return save_path
@@ -295,6 +294,7 @@ class DataFetcher:
 
         finally:
             driver.quit()
+
 
 
     # -------------------- 데이터 검증 -------------------- #
