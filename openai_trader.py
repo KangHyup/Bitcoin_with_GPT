@@ -1,9 +1,8 @@
 # openai_trader.py
-# 데이터를 기반으로 프롬프트를 작성해 실제 코인을 매매 (바이낸스 API 기반)
+# 매매 결정을 받아 바이낸스 API를 통해 실제 거래를 실행
 
 import os
 import json
-import openai
 import logging
 from binance.client import Client
 from dotenv import load_dotenv
@@ -14,10 +13,6 @@ load_dotenv()
 # 바이낸스 API 키 및 시크릿 로드
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-
-# OpenAI API 키 로드
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
 
 # 바이낸스 클라이언트 초기화
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
@@ -33,11 +28,11 @@ def calculate_order_quantity(symbol, usdt_amount):
     """
     지정된 USDT 금액으로 매수할 수 있는 BTC 수량을 계산하는 함수.
     바이낸스의 최소 주문 단위를 고려합니다.
-    
+
     Parameters:
         symbol (str): 거래 심볼 (예: "BTCUSDT")
         usdt_amount (float): 매수에 사용할 USDT 금액
-    
+
     Returns:
         float: 매수할 BTC 수량
     """
@@ -76,68 +71,18 @@ def calculate_order_quantity(symbol, usdt_amount):
         logging.error(f"매수 수량 계산 중 오류 발생: {e}")
         return 0
 
-def send_to_openai_and_trade(data_for_ai):
+def execute_trade(decision, reason, symbol="BTCUSDT"):
     """
-    1. data_for_ai를 OpenAI API에 전송
-    2. AI 응답(JSON)에서 매매 결정을 파싱
-    3. 바이낸스 매매 로직 실행
+    매매 결정을 받아 바이낸스 API를 통해 매수/매도/hold를 실행하는 함수.
+
+    Parameters:
+        decision (str): "buy", "sell", "hold"
+        reason (str): 매매 결정의 이유
+        symbol (str): 거래 심볼 (기본값: "BTCUSDT")
+
+    Returns:
+        None
     """
-    # ---------------------------
-    # (1) 프롬프트 불러오기 (시스템 메시지)
-    # ---------------------------
-    try:
-        with open("gpt_prompt.txt", "r", encoding="utf-8") as f:
-            system_prompt = f.read()
-        logging.info("gpt_prompt.txt 로드 완료.")
-    except FileNotFoundError:
-        system_prompt = (
-            "You are a helpful assistant. You will receive crypto data and respond with a buy/sell/hold decision."
-        )
-        logging.warning("gpt_prompt.txt 파일을 찾을 수 없어 기본 프롬프트 사용.")
-
-    # ---------------------------
-    # (2) OpenAI Chat API 호출
-    # ---------------------------
-    user_content = json.dumps(data_for_ai, ensure_ascii=False)
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",  # 또는 "gpt-3.5-turbo"
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Analyze the following crypto data and provide buy/sell/hold decision.\n{user_content}"}
-            ],
-            max_tokens=200  # 응답 토큰 수 제한
-        )
-        ai_answer = response.choices[0].message.content.strip()
-        logging.info("OpenAI API 응답 수신 완료.")
-        print("[AI Raw Answer]", ai_answer)
-    except Exception as e:
-        logging.error(f"OpenAI API 요청 중 오류 발생: {e}")
-        print(f"OpenAI API 요청 중 오류 발생: {e}")
-        return
-
-    # ---------------------------
-    # (3) AI 응답 파싱 (JSON 가정)
-    # ---------------------------
-    # 예: {"decision":"buy","reason":"단기 추세 반등 예상"}
-    try:
-        ai_result = json.loads(ai_answer)
-        decision = ai_result.get("decision", "hold").lower()
-        reason = ai_result.get("reason", "No reason provided.")
-        logging.info(f"AI 결정: {decision}, 이유: {reason}")
-    except json.JSONDecodeError:
-        decision = "hold"
-        reason = "JSON 파싱 실패"
-        logging.warning("AI 응답을 JSON으로 파싱하는 데 실패했습니다.")
-    except Exception as e:
-        decision = "hold"
-        reason = "Error parsing AI response"
-        logging.error(f"AI 응답 파싱 중 오류 발생: {e}")
-
-    # ---------------------------
-    # (4) 매매 로직 실행
-    # ---------------------------
     try:
         # 바이낸스 잔고 조회
         account_info = client.get_account()
@@ -148,19 +93,19 @@ def send_to_openai_and_trade(data_for_ai):
         my_btc = balances.get("BTC", 0)
 
         # 현재 BTCUSDT 가격 조회
-        ticker = client.get_symbol_ticker(symbol="BTCUSDT")
+        ticker = client.get_symbol_ticker(symbol=symbol)
         current_price = float(ticker['price']) if 'price' in ticker else 0
         logging.info(f"현재 BTCUSDT 가격: {current_price}")
 
         if decision == "buy":
             # USDT 잔고가 10 USDT 이상일 때 매수 (바이낸스에서는 최소 주문량이 있으므로 10 USDT로 설정)
             if my_usdt >= 10:
-                order_quantity = calculate_order_quantity("BTCUSDT", my_usdt * 0.9995)  # 수수료 고려
+                order_quantity = calculate_order_quantity(symbol, my_usdt * 0.9995)  # 수수료 고려
                 if order_quantity > 0:
                     print(">>> BUY (market order) BTCUSDT")
                     try:
                         buy_order = client.order_market_buy(
-                            symbol="BTCUSDT",
+                            symbol=symbol,
                             quantity=order_quantity
                         )
                         logging.info(f"매수 주문 실행: {buy_order}")
@@ -183,7 +128,7 @@ def send_to_openai_and_trade(data_for_ai):
                 print(">>> SELL (market order) BTCUSDT")
                 try:
                     sell_order = client.order_market_sell(
-                        symbol="BTCUSDT",
+                        symbol=symbol,
                         quantity=my_btc
                     )
                     logging.info(f"매도 주문 실행: {sell_order}")
